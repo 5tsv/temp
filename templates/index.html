@@ -193,6 +193,11 @@
                         canvas.width = image.width;
                         canvas.height = image.height;
                     };
+
+                    // 重置检测框
+                    rois = [];
+                    currentRoi = 0;
+                    ctx.clearRect(0, 0, canvas.width, canvas.height);
                 }
             })
             .catch(err => console.error('Error:', err));

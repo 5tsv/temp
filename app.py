@@ -229,7 +229,12 @@ def process_video():
                     cv2.putText(frame, "Correct Way", (int(x1), int(y2) + 35),
                                 cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 0), 2)
 
+                # 计算从上往下移动的车辆数目
                 if last_position['y'] < (min_y + max_y) / 2 <= center['y']:
+                    vehicle_count += 1
+        
+                # 计算从下往上移动的车辆数目
+                if last_position['y'] > (min_y + max_y) / 2 >= center['y']:
                     vehicle_count += 1
             else:
                 vehicle_data[track_id] = {"last_position": center}
@@ -250,14 +255,22 @@ def process_video():
             writer = cv2.VideoWriter(output_path, fourcc, 30, (frame.shape[1], frame.shape[0]))
         writer.write(frame)
 
+    
     cap.release()
     writer.release()
+    # 将视频转换为H.264编码
+    h264_output_path = os.path.join(app.config['RESULT_FOLDER'], f"processed_{os.path.splitext(os.path.basename(input_path))[0]}_h264.mp4")
+    ffmpeg_command = f"ffmpeg -i {output_path} -c:v libx264 -c:a aac -strict experimental {h264_output_path}"
+    print(ffmpeg_command)
+    os.system(ffmpeg_command)
 
-    return jsonify({"message": "Video processed successfully!",
-                    "video_path": f"results/processed_{os.path.basename(input_path)}",
-                    "speeds": speeds,
-                    "vehicle_counts": vehicle_counts,
-                    "wrong_way_count": wrong_way_count})
+    return jsonify({
+        "message": "Video processed successfully!",
+        "video_path": f"/results/processed_{os.path.splitext(os.path.basename(input_path))[0]}_h264.mp4",  # 返回H.264编码的视频路径
+        "speeds": speeds,
+        "vehicle_counts": vehicle_counts,
+        "wrong_way_count": wrong_way_count
+    })
 
 @app.route('/results/<filename>')
 def serve_result(filename):
