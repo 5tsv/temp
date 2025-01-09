@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>车辆检测系统</title>
+    <style>
+        #image-container {
+            position: relative;
+        }
+        #image {
+            display: block;
+        }
+        #canvas {
+            position: absolute;
+            top: 0;
+            left: 0;
+            border: 1px solid red;
+        }
+    </style>
+    <!-- 引入 Chart.js 库 -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+</head>
+<body>
+    <h1>车辆检测系统</h1>
+
+    <div id="image-container">
+        <img id="image" src="" alt="Image for ROI selection">
+        <canvas id="canvas"></canvas>
+    </div>
+
+    <label for="scale_factor">像素到实际距离的比例（米/像素）:</label>
+    <input type="number" id="scale_factor" step="0.01" value="0.0625">
+
+    <button id="submit-roi">提交检测框</button>
+    <p id="result"></p>
+
+    <h2>选择视频源</h2>
+    <div>
+        <label for="file-input">上传本地视频文件:</label>
+        <input type="file" id="file-input" accept="video/*">
+    </div>
+    <div>
+        <label for="url-input">输入在线视频文件URL:</label>
+        <input type="text" id="url-input" placeholder="http://example.com/video.mp4">
+    </div>
+    <button id="upload-video">上传视频</button>
+    <button id="submit-video">提交视频</button>
+
+    <div id="results-container" style="display:none">
+        <h2>检测结果</h2>
+        <video id="result-video" controls></video>
+        <canvas id="speed-chart" width="640" height="360"></canvas>
+        <canvas id="traffic-chart" width="640" height="360"></canvas>
+        <div id="wrong-way-count"></div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('canvas');
+        const ctx = canvas.getContext('2d');
+        const image = document.getElementById('image');
+        const rois = [];  // 保存检测框的顶点
+        let currentRoi = 0;  // 当前正在绘制的检测框索引
+        let uploadedVideoPath = '';  // 保存已上传视频的路径
+
+        // 添加鼠标事件监听器
+        canvas.addEventListener('click', (e) => {
+            if (rois.length > currentRoi && rois[currentRoi].length >= 4) {
+                alert('已经选择了四个顶点，请选择下一个检测框');
+                return;
+            }
+
+            const rect = canvas.getBoundingClientRect();
+            const x = (e.clientX - rect.left) * (image.naturalWidth / rect.width);
+            const y = (e.clientY - rect.top) * (image.naturalHeight / rect.height);
+
+            if (!rois[currentRoi]) {
+                rois[currentRoi] = [];
+            }
+            rois[currentRoi].push({ x, y });
+
+            // 绘制顶点
+            ctx.fillStyle = 'red';
+            ctx.beginPath();
+            ctx.arc(e.clientX - rect.left, e.clientY - rect.top, 5, 0, 2 * Math.PI);
+            ctx.fill();
+
+            // 绘制四边形
+            if (rois[currentRoi].length === 4) {
+                ctx.strokeStyle = 'red';
+                ctx.lineWidth = 2;
+                ctx.beginPath();
+                ctx.moveTo(rois[currentRoi][0].x * rect.width / image.naturalWidth, rois[currentRoi][0].y * rect.height / image.naturalHeight);
+                rois[currentRoi].forEach((vertex, index) => {
+                    if (index > 0) {
+                        ctx.lineTo(vertex.x * rect.width / image.naturalWidth, vertex.y * rect.height / image.naturalHeight);
+                    }
+                });
+                ctx.closePath();
+                ctx.stroke();
+
+                // 切换到下一个检测框
+                currentRoi++;
+            }
+        });
+
+        document.getElementById('submit-roi').addEventListener('click', () => {
+            if (rois.length === 0 || rois.some(roi => roi.length !== 4)) {
+                alert('请为检测框选择四个顶点');
+                return;
+            }
+
+            const scale_factor = document.getElementById('scale_factor').value;
+
+            const data = {
+                rois: rois,
+                scale_factor: parseFloat(scale_factor),
+                video_path: uploadedVideoPath  // 使用已上传视频的路径
+            };
+
+            fetch('/set_config', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify(data),
+            })
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('result').innerText = data.message;
+            })
+            .catch(err => console.error('Error:', err));
+        });
+
+        document.getElementById('upload-video').addEventListener('click', () => {
+            const fileInput = document.getElementById('file-input');
+            const urlInput = document.getElementById('url-input');
+            const formData = new FormData();
+
+            if (fileInput.files.length > 0) {
+                formData.append('file', fileInput.files[0]);
+            } else if (urlInput.value) {
+                formData.append('url', urlInput.value);
+            } else {
+                alert('请上传视频文件或输入视频URL');
+                return;
+            }
+
+            fetch('/upload_video', {
+                method: 'POST',
+                body: formData,
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.frame_path && data.video_path) {
+                    image.src = data.frame_path;
+                    uploadedVideoPath = data.video_path;  // 保存视频路径
+
+                    // 设置 canvas 尺寸以匹配图像尺寸
+                    image.onload = () => {
+                        canvas.width = image.width;
+                        canvas.height = image.height;
+                    };
+                }
+            })
+            .catch(err => console.error('Error:', err));
+        });
+
+        document.getElementById('submit-video').addEventListener('click', () => {
+            if (!uploadedVideoPath) {
+                alert('请先上传视频');
+                return;
+            }
+
+            fetch('/process_video', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                },
+                body: JSON.stringify({ video_path: uploadedVideoPath }),  // 直接使用已上传的视频路径
+            })
+            .then(response => response.json())
+            .then(data => {
+                if (data.video_path && data.speeds && data.vehicle_counts && data.wrong_way_count) {
+                    document.getElementById('results-container').style.display = 'block';
+                    document.getElementById('result-video').src = data.video_path;
+                    drawSpeedChart(data.speeds);
+                    drawTrafficChart(data.vehicle_counts);
+                    document.getElementById('wrong-way-count').innerText = `逆行车辆数量: ${data.wrong_way_count}`;
+                }
+            })
+            .catch(err => console.error('Error:', err));
+        });
+
+        function drawSpeedChart(speeds) {
+            const ctx = document.getElementById('speed-chart').getContext('2d');
+            new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: speeds.map((_, index) => `Vehicle ${index + 1}`),
+                    datasets: [{
+                        label: 'Speed (km/h)',
+                        data: speeds,
+                        backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                        borderColor: 'rgba(75, 192, 192, 1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+
+        function drawTrafficChart(vehicleCounts) {
+            const ctx = document.getElementById('traffic-chart').getContext('2d');
+            new Chart(ctx, {
+                type: 'line',
+                data: {
+                    labels: vehicleCounts.map((_, index) => `Frame ${index + 1}`),
+                    datasets: [{
+                        label: 'Vehicle Count',
+                        data: vehicleCounts,
+                        backgroundColor: 'rgba(153, 102, 255, 0.2)',
+                        borderColor: 'rgba(153, 102, 255, 1)',
+                        borderWidth: 1
+                    }]
+                },
+                options: {
+                    scales: {
+                        y: {
+                            beginAtZero: true
+                        }
+                    }
+                }
+            });
+        }
+    </script>
+</body>
+</html>
