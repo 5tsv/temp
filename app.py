@@ -5,6 +5,7 @@ import numpy as np
 from ultralytics import YOLO
 import requests
 import supervision as sv
+import csv
 
 app = Flask(__name__)
 
@@ -145,10 +146,10 @@ def process_video():
     iou_threshold = global_config["iou_threshold"]
     vehicle_data = {}
     vehicle_count = 0
-    speeds = []
     vehicle_counts = []
     wrong_way_count = 0
     initial_directions = {}
+    speed_threshold=120
 
     # 计算检测区域的最大和最小 y 坐标
     min_y = min(vertex['y'] for roi in rois for vertex in roi)
@@ -174,7 +175,7 @@ def process_video():
         detections = sv.Detections.from_ultralytics(results)
 
         # 更新 ByteTrack 跟踪器
-        tracks = tracker.update_with_detections(detections)  # 更新此行
+        tracks = tracker.update_with_detections(detections) 
         print(tracks)
         used_labels_y = set()  # 集合用于存储已使用的y坐标
 
@@ -191,7 +192,7 @@ def process_video():
             cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (0, 255, 0), 2)
             
             label_y = int(y1) - 10
-            while label_y in used_labels_y:
+            while (label_y in used_labels_y):
                 label_y -= 15  # 如果当前y坐标已被使用，向上移动一段距离
             used_labels_y.add(label_y)
             cv2.putText(frame, label, (int(x1), label_y), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (36, 255, 12), 2)
@@ -206,17 +207,24 @@ def process_video():
                 last_position = vehicle_data[track_id]["last_position"]
 
                 distance_moved = np.linalg.norm(np.array([center['x'], center['y']]) - np.array([last_position['x'], last_position['y']]))
-                vehicle_data[track_id] = {"last_position": center}
+                vehicle_data[track_id]["last_position"] = center
                 speed = distance_moved * scale_factor * 30 * 3.6
-                speeds.append(speed)
-
+                # 记录最大速度
+                if speed > vehicle_data[track_id].get("max_speed", 0):
+                    vehicle_data[track_id]["max_speed"] = speed
+                    
                 movement_direction = center['y'] - last_position['y']
-                if track_id not in initial_directions:
-                    initial_directions[track_id] = "up" if movement_direction < 0 else "down"
                 
-                if (initial_directions[track_id] == "up" and movement_direction > 0) or (initial_directions[track_id] == "down" and movement_direction < 0):
+                # 设置检测框的初始运动方向
+                if roi_index not in initial_directions:
+                    initial_directions[roi_index] = "up" if movement_direction < 0 else "down"
+
+                # 利用检测框的初始运动方向来判断车辆是否逆行
+                if (initial_directions[roi_index] == "up" and movement_direction > 0) or (initial_directions[roi_index] == "down" and movement_direction < 0):
                     vehicle_data[track_id]["direction"] = "wrong_way"
-                    wrong_way_count += 1
+                    if not vehicle_data[track_id].get("counted_as_wrong_way", False):
+                        wrong_way_count += 1
+                        vehicle_data[track_id]["counted_as_wrong_way"] = True
                 else:
                     vehicle_data[track_id]["direction"] = "correct_way"
 
@@ -236,6 +244,10 @@ def process_video():
                 # 计算从下往上移动的车辆数目
                 if last_position['y'] > (min_y + max_y) / 2 >= center['y']:
                     vehicle_count += 1
+                
+                if speed > speed_threshold:
+                    speed_frame_path = os.path.join(app.config['RESULT_FOLDER'], f"speed_{track_id}_y1_{y1}.jpg")
+                    cv2.imwrite(speed_frame_path, frame)
             else:
                 vehicle_data[track_id] = {"last_position": center}
 
@@ -263,15 +275,24 @@ def process_video():
     ffmpeg_command = f"ffmpeg -i {output_path} -c:v libx264 -c:a aac -strict experimental {h264_output_path}"
     print(ffmpeg_command)
     os.system(ffmpeg_command)
+        # 生成 CSV 文件
+    csv_path = os.path.join(app.config['RESULT_FOLDER'], f"speeds_{os.path.splitext(os.path.basename(input_path))[0]}.csv")
+    with open(csv_path, mode='w', newline='') as csv_file:
+        fieldnames = ['track_id', 'max_speed']
+        writer = csv.DictWriter(csv_file, fieldnames=fieldnames)
+
+        writer.writeheader()
+        for track_id, data in vehicle_data.items():
+            writer.writerow({'track_id': track_id, 'max_speed': data.get('max_speed', 0)})
+
 
     return jsonify({
         "message": "Video processed successfully!",
         "video_path": f"/results/processed_{os.path.splitext(os.path.basename(input_path))[0]}_h264.mp4",  # 返回H.264编码的视频路径
-        "speeds": speeds,
+        "csv_path": f"/results/speeds_{os.path.splitext(os.path.basename(input_path))[0]}.csv",  # 返回CSV文件路径
         "vehicle_counts": vehicle_counts,
         "wrong_way_count": wrong_way_count
     })
-
 @app.route('/results/<filename>')
 def serve_result(filename):
     """
@@ -285,6 +306,13 @@ def serve_frame(filename):
     提供处理后视频的静态文件访问
     """
     return send_from_directory(app.config['FRAME_FOLDER'], filename)
+
+@app.route('/js/<filename>')
+def serve_js(filename):
+    """
+    提供js的静态文件访问
+    """
+    return send_from_directory('static/js', filename)
 
 if __name__ == '__main__':
     app.run(debug=True)

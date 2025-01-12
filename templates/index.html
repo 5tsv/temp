@@ -25,7 +25,7 @@
         }
     </style>
     <!-- 引入 Chart.js 库 -->
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="js/chart.js"></script>
 </head>
 <body>
     <h1>车辆检测系统</h1>
@@ -69,6 +69,8 @@
         let rois = [];  // 保存检测框的顶点
         let currentRoi = 0;  // 当前正在绘制的检测框索引
         let uploadedVideoPath = '';  // 保存已上传视频的路径
+        let speedChart;  // 用于保存速度图表实例
+        let trafficChart;  // 用于保存交通流量图表实例
 
         // 添加鼠标事件监听器
         canvas.addEventListener('click', (e) => {
@@ -150,15 +152,26 @@
                 })
                 .then(response => response.json())
                 .then(data => {
-                    if (data.video_path && data.speeds && data.vehicle_counts && data.wrong_way_count) {
+                    if (data.video_path && data.csv_path && data.vehicle_counts && data.wrong_way_count) {
                         document.getElementById('results-container').style.display = 'block';
                         document.getElementById('result-video').src = data.video_path;
-                        drawSpeedChart(data.speeds);
+
+                        // 获取CSV文件并解析
+                        fetch(data.csv_path)
+                        .then(response => response.text())
+                        .then(csvText => {
+                            const speeds = parseCSV(csvText);
+                            drawSpeedChart(speeds);
+                        });
+
                         drawTrafficChart(data.vehicle_counts);
                         document.getElementById('wrong-way-count').innerText = `逆行车辆数量: ${data.wrong_way_count}`;
                     }
                 })
-                .catch(err => console.error('Error:', err));
+                .catch(err => {
+                    console.error('Error:', err)
+                    if (String(err).startsWith("TypeError: Failed to fetch")){alert("请重新提交检测")}
+                });
 
             })
             .catch(err => console.error('Error:', err));
@@ -215,14 +228,19 @@
         });
 
         function drawSpeedChart(speeds) {
+            // 销毁现有的图表实例
+            if (speedChart) {
+                speedChart.destroy();
+            }
+
             const ctx = document.getElementById('speed-chart').getContext('2d');
-            new Chart(ctx, {
+            speedChart = new Chart(ctx, {
                 type: 'bar',
                 data: {
-                    labels: speeds.map((_, index) => `Vehicle ${index + 1}`),
+                    labels: speeds.map(speed => speed.track_id),
                     datasets: [{
                         label: 'Speed (km/h)',
-                        data: speeds,
+                        data: speeds.map(speed => speed.max_speed),
                         backgroundColor: 'rgba(75, 192, 192, 0.2)',
                         borderColor: 'rgba(75, 192, 192, 1)',
                         borderWidth: 1
@@ -239,8 +257,13 @@
         }
 
         function drawTrafficChart(vehicleCounts) {
+            // 销毁现有的图表实例
+            if (trafficChart) {
+                trafficChart.destroy();
+            }
+
             const ctx = document.getElementById('traffic-chart').getContext('2d');
-            new Chart(ctx, {
+            trafficChart = new Chart(ctx, {
                 type: 'line',
                 data: {
                     labels: vehicleCounts.map((_, index) => `Frame ${index + 1}`),
@@ -260,6 +283,24 @@
                     }
                 }
             });
+        }
+
+        function parseCSV(csvText) {
+            const lines = csvText.split('\r\n');
+            const result = [];
+            const headers = lines[0].split(',');
+
+            for (let i = 1; i < lines.length; i++) {
+                const obj = {};
+                const currentLine = lines[i].split(',');
+
+                for (let j = 0; j < headers.length; j++) {
+                    obj[headers[j]] = currentLine[j];
+                }
+                result.push(obj);
+            }
+
+            return result.filter(obj => obj.track_id && obj.max_speed);  // 过滤掉无效行
         }
     </script>
 </body>
