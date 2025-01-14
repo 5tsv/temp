@@ -60,6 +60,7 @@
         <canvas id="speed-chart" width="640" height="360"></canvas>
         <canvas id="traffic-chart" width="640" height="360"></canvas>
         <div id="wrong-way-count"></div>
+        <button id="get-results">获取统计结果</button>
     </div>
 
     <script>
@@ -142,41 +143,57 @@
                     alert('请先上传视频');
                     return;
                 }
+                
 
-                fetch('/process_video', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ video_path: uploadedVideoPath }),  // 直接使用已上传的视频路径
-                })
-                .then(response => response.json())
-                .then(data => {
-                    if (data.video_path && data.csv_path && data.vehicle_counts && data.wrong_way_count) {
-                        document.getElementById('results-container').style.display = 'block';
-                        document.getElementById('result-video').src = data.video_path;
+                // 显示预览容器
 
-                        // 获取CSV文件并解析
-                        fetch(data.csv_path)
-                        .then(response => response.text())
-                        .then(csvText => {
-                            const speeds = parseCSV(csvText);
-                            drawSpeedChart(speeds);
-                        });
-
-                        drawTrafficChart(data.vehicle_counts);
-                        document.getElementById('wrong-way-count').innerText = `逆行车辆数量: ${data.wrong_way_count}`;
+                // 创建 EventSource 来接收实时帧
+                const eventSource = new EventSource(`/process_video?video_path=${encodeURIComponent(uploadedVideoPath)}`);
+                
+                eventSource.onmessage = function(event) {
+                    const data = JSON.parse(event.data);
+                    
+                    if (data.type === 'frame') {
+                        image.src = 'data:image/jpeg;base64,' + data.frame;
+                    } else if (data.type === 'complete') {
+                        // 处理完成,关闭 EventSource
+                        eventSource.close();
+                        document.getElementById('get-results').click()
+                        // 显示最终视频和图表
+                        
                     }
-                })
-                .catch(err => {
-                    console.error('Error:', err)
-                    if (String(err).startsWith("TypeError: Failed to fetch")){alert("请重新提交检测")}
-                });
+                };
 
+                eventSource.onerror = function(event) {
+                    console.error('EventSource failed:', event);
+                    eventSource.close();
+                };
             })
             .catch(err => console.error('Error:', err));
         });
-
+        // 添加获取结果的按钮事件处理
+        document.getElementById('get-results').addEventListener('click', () => {
+            document.getElementById('results-container').style.display = 'block';
+            fetch('/get_results')
+            .then(response => response.json())
+            .then(data => {
+                document.getElementById('result-video').src = data.video_path
+                if (data.csv_path && data.vehicle_counts && data.wrong_way_count) {
+                    // 获取CSV文件并解析
+                    fetch(data.csv_path)
+                    .then(response => response.text())
+                    .then(csvText => {
+                        const speeds = parseCSV(csvText);
+                        drawSpeedChart(speeds);
+                    });
+    
+                    drawTrafficChart(data.vehicle_counts);
+                    document.getElementById('wrong-way-count').innerText = 
+                        `逆行车辆数量: ${data.wrong_way_count}`;
+                }
+            })
+            .catch(err => console.error('Error:', err));
+        });
         document.getElementById('upload-video').addEventListener('click', () => {
             const fileInput = document.getElementById('file-input');
             const urlInput = document.getElementById('url-input');
